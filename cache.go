@@ -208,7 +208,7 @@ func (protonDrive *ProtonDrive) getLink(ctx context.Context, linkID string) (*pr
 	}
 
 	// no cached data, fetch
-	link, err := protonDrive.c.GetLink(ctx, protonDrive.MainShare.ShareID, linkID)
+	link, err := protonDrive.c.GetVolumeLink(ctx, protonDrive.MainShare.VolumeID, linkID)
 	if err != nil {
 		return nil, err
 	}

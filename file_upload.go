@@ -190,7 +190,7 @@ func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link
 
 			// delete the link (skipping trash, otherwise it won't work) and
 			// signal the caller to resubmit the file creation request
-			err := protonDrive.c.DeleteChildren(ctx, protonDrive.MainShare.ShareID, link.ParentLinkID, linkID)
+			err := protonDrive.c.DeleteVolumeLinks(ctx, protonDrive.MainShare.VolumeID, linkID)
 			if err != nil {
 				return "", false, err
 			}
@@ -215,14 +215,14 @@ func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link
 			// Question: how do we observe for file upload cancellation -> clientUID?
 			// Random thoughts: if there are concurrent modification to the draft, the server should be able to catch this when commiting the revision
 			// since the manifestSignature (hash) will fail to match
-			err = protonDrive.c.DeleteRevision(ctx, protonDrive.MainShare.ShareID, linkID, draftRevision[0].ID)
+			err = protonDrive.c.DeleteVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID, draftRevision[0].ID)
 			if err != nil {
 				return "", false, err
 			}
 		}
 
 		// create a new revision
-		newRevision, err := protonDrive.c.CreateRevision(ctx, protonDrive.MainShare.ShareID, linkID)
+		newRevision, err := protonDrive.c.CreateVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID)
 		if err != nil {
 			return "", false, err
 		}
@@ -321,7 +321,7 @@ func (protonDrive *ProtonDrive) createFileUploadDraft(ctx context.Context, paren
 	}
 
 	createFileAction := func() (*proton.CreateFileRes, *proton.Link, error) {
-		createFileResp, err := protonDrive.c.CreateFile(ctx, protonDrive.MainShare.ShareID, createFileReq)
+		createFileResp, err := protonDrive.c.CreateVolumeFile(ctx, protonDrive.MainShare.VolumeID, createFileReq)
 		if err != nil {
 			// FIXME: check for duplicated filename by relying on checkAvailableHashes -> able to retrieve linkID too
 			// Also saving generating resources such as new nodeKR, etc.
@@ -425,7 +425,7 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 		requestLinks := func(ctx context.Context, blockList []proton.BlockUploadInfo) ([]proton.BlockUploadLink, error) {
 			return protonDrive.c.RequestBlockUpload(ctx, proton.BlockUploadReq{
 				AddressID:  protonDrive.MainShare.AddressID,
-				ShareID:    protonDrive.MainShare.ShareID,
+				VolumeID:   protonDrive.MainShare.VolumeID,
 				LinkID:     linkID,
 				RevisionID: revisionID,
 				BlockList:  blockList,
@@ -582,7 +582,7 @@ func (protonDrive *ProtonDrive) commitNewRevision(ctx context.Context, nodeKR *c
 		return err
 	}
 
-	err = protonDrive.c.CommitRevision(ctx, protonDrive.MainShare.ShareID, linkID, revisionID, commitRevisionReq)
+	err = protonDrive.c.CommitVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID, revisionID, commitRevisionReq)
 	if err != nil {
 		return err
 	}

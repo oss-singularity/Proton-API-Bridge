@@ -6,8 +6,8 @@ import (
 	"github.com/rclone/go-proton-api"
 )
 
-func (protonDrive *ProtonDrive) moveToTrash(ctx context.Context, parentLinkID string, linkIDs ...string) error {
-	err := protonDrive.c.TrashChildren(ctx, protonDrive.MainShare.ShareID, parentLinkID, linkIDs...)
+func (protonDrive *ProtonDrive) moveToTrash(ctx context.Context, linkIDs ...string) error {
+	err := protonDrive.c.TrashVolumeLinks(ctx, protonDrive.MainShare.VolumeID, linkIDs...)
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func (protonDrive *ProtonDrive) MoveFileToTrashByID(ctx context.Context, linkID 
 		return ErrLinkTypeMustToBeFileType
 	}
 
-	return protonDrive.moveToTrash(ctx, fileLink.ParentLinkID, linkID)
+	return protonDrive.moveToTrash(ctx, linkID)
 }
 
 func (protonDrive *ProtonDrive) MoveFolderToTrashByID(ctx context.Context, linkID string, onlyOnEmpty bool) error {
@@ -46,7 +46,7 @@ func (protonDrive *ProtonDrive) MoveFolderToTrashByID(ctx context.Context, linkI
 		return ErrLinkTypeMustToBeFolderType
 	}
 
-	childrenLinks, err := protonDrive.c.ListChildren(ctx, protonDrive.MainShare.ShareID, linkID /* false: list only active ones */, false)
+	childrenLinks, err := protonDrive.c.ListVolumeChildren(ctx, protonDrive.MainShare.VolumeID, linkID /* false: list only active ones */, false)
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func (protonDrive *ProtonDrive) MoveFolderToTrashByID(ctx context.Context, linkI
 		}
 	}
 
-	return protonDrive.moveToTrash(ctx, folderLink.ParentLinkID, linkID)
+	return protonDrive.moveToTrash(ctx, linkID)
 }
 
 // WARNING!!!!
@@ -66,7 +66,7 @@ func (protonDrive *ProtonDrive) MoveFolderToTrashByID(ctx context.Context, linkI
 func (protonDrive *ProtonDrive) EmptyRootFolder(ctx context.Context) error {
 	protonDrive.ClearCache()
 
-	links, err := protonDrive.c.ListChildren(ctx, protonDrive.MainShare.ShareID, protonDrive.MainShare.LinkID, true)
+	links, err := protonDrive.c.ListVolumeChildren(ctx, protonDrive.MainShare.VolumeID, protonDrive.MainShare.LinkID, true)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (protonDrive *ProtonDrive) EmptyRootFolder(ctx context.Context) error {
 			}
 		}
 
-		err := protonDrive.c.TrashChildren(ctx, protonDrive.MainShare.ShareID, protonDrive.MainShare.LinkID, linkIDs...)
+		err := protonDrive.c.TrashVolumeLinks(ctx, protonDrive.MainShare.VolumeID, linkIDs...)
 		if err != nil {
 			return err
 		}
@@ -93,7 +93,7 @@ func (protonDrive *ProtonDrive) EmptyRootFolder(ctx context.Context) error {
 			}
 		}
 
-		err := protonDrive.c.DeleteChildren(ctx, protonDrive.MainShare.ShareID, protonDrive.MainShare.LinkID, linkIDs...)
+		err := protonDrive.c.DeleteVolumeLinks(ctx, protonDrive.MainShare.VolumeID, linkIDs...)
 		if err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ func (protonDrive *ProtonDrive) EmptyRootFolder(ctx context.Context) error {
 func (protonDrive *ProtonDrive) EmptyTrash(ctx context.Context) error {
 	protonDrive.ClearCache()
 
-	err := protonDrive.c.EmptyTrash(ctx, protonDrive.MainShare.ShareID)
+	err := protonDrive.c.EmptyVolumeTrash(ctx, protonDrive.MainShare.VolumeID)
 	if err != nil {
 		return err
 	}

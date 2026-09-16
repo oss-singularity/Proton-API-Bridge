@@ -24,7 +24,7 @@ func (protonDrive *ProtonDrive) ListDirectory(
 	}
 
 	if folderLink.State == proton.LinkStateActive {
-		childrenLinks, err := protonDrive.c.ListChildren(ctx, protonDrive.MainShare.ShareID, folderLink.LinkID, true)
+		childrenLinks, err := protonDrive.c.ListVolumeChildren(ctx, protonDrive.MainShare.VolumeID, folderLink.LinkID, true)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +137,7 @@ func (protonDrive *ProtonDrive) CreateNewFolder(ctx context.Context, parentLink 
 
 	// FIXME: check for duplicated filename by relying on checkAvailableHashes
 	// if the folder name already exist, this call will return an error
-	createFolderResp, err := protonDrive.c.CreateFolder(ctx, protonDrive.MainShare.ShareID, createFolderReq)
+	createFolderResp, err := protonDrive.c.CreateVolumeFolder(ctx, protonDrive.MainShare.VolumeID, createFolderReq)
 	if err != nil {
 		return "", err
 	}
@@ -251,7 +251,7 @@ func (protonDrive *ProtonDrive) moveLink(ctx context.Context, srcLink *proton.Li
 	// TODO: disable cache when move is in action?
 	// because there might be the case where others read for the same link currently being move -> race condition
 	// argument: cache itself is already outdated in a sense, as we don't even have event system (even if we have, it's still outdated...)
-	err = protonDrive.c.MoveLink(ctx, protonDrive.MainShare.ShareID, srcLink.LinkID, req)
+	err = protonDrive.c.MoveVolumeLink(ctx, protonDrive.MainShare.VolumeID, srcLink.LinkID, req)
 	if err != nil {
 		return err
 	}
