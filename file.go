@@ -17,7 +17,7 @@ type FileSystemAttrs struct {
 }
 
 func (protonDrive *ProtonDrive) GetRevisions(ctx context.Context, link *proton.Link, revisionType proton.RevisionState) ([]*proton.RevisionMetadata, error) {
-	revisions, err := protonDrive.c.ListRevisions(ctx, protonDrive.MainShare.ShareID, link.LinkID)
+	revisions, err := protonDrive.c.ListVolumeRevisions(ctx, protonDrive.MainShare.VolumeID, link.LinkID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (protonDrive *ProtonDrive) GetActiveRevisionWithAttrs(ctx context.Context, 
 		return nil, nil, ErrCantFindActiveRevision
 	}
 
-	revision, err := protonDrive.c.GetRevisionAllBlocks(ctx, protonDrive.MainShare.ShareID, link.LinkID, revisionsMetadata[0].ID)
+	revision, err := protonDrive.c.GetVolumeRevisionAllBlocks(ctx, protonDrive.MainShare.VolumeID, link.LinkID, revisionsMetadata[0].ID)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -66,10 +66,12 @@ func NewProtonDrive(ctx context.Context, config *common.Config, authHandler prot
 	// log.Printf("all volumes %#v", volumes)
 
 	mainShareID := ""
+	mainVolumeID := ""
 	for i := range volumes {
 		// iOS drive: first active volume
 		if volumes[i].State == proton.VolumeStateActive {
 			mainShareID = volumes[i].Share.ShareID
+			mainVolumeID = volumes[i].VolumeID
 		}
 	}
 	// log.Println("total volumes", len(volumes), "mainShareID", mainShareID)
@@ -90,6 +92,7 @@ func NewProtonDrive(ctx context.Context, config *common.Config, authHandler prot
 		for i := range shares {
 			if shares[i].ShareID == mainShare.ShareID &&
 				shares[i].LinkID == mainShare.LinkID &&
+				shares[i].VolumeID == mainVolumeID &&
 				shares[i].Flags == proton.PrimaryShare &&
 				shares[i].Type == proton.ShareTypeMain {
 				mainShareCheck = true
@@ -111,7 +114,7 @@ func NewProtonDrive(ctx context.Context, config *common.Config, authHandler prot
 		Links also hold the file name (encrypted) and a hash of the name for name collisions.
 		Link data is encrypted with its owning Share keyring.
 	*/
-	rootLink, err := c.GetLink(ctx, mainShare.ShareID, mainShare.LinkID)
+	rootLink, err := c.GetVolumeLink(ctx, mainVolumeID, mainShare.LinkID)
 	if err != nil {
 		return nil, nil, err
 	}

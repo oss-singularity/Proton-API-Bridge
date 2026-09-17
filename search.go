@@ -77,7 +77,7 @@ func (protonDrive *ProtonDrive) SearchByNameInActiveFolder(
 	// use available hash to check if it exists
 	// more efficient than linear scan to just do existence check
 	// used in rclone when Put(), it will try to see if the object exists or not
-	res, err := protonDrive.c.CheckAvailableHashes(ctx, protonDrive.MainShare.ShareID, folderLink.LinkID, proton.CheckAvailableHashesReq{
+	res, err := protonDrive.c.CheckVolumeAvailableHashes(ctx, protonDrive.MainShare.VolumeID, folderLink.LinkID, proton.CheckAvailableHashesReq{
 		Hashes: []string{targetNameHash},
 	})
 	if err != nil {
@@ -89,7 +89,7 @@ func (protonDrive *ProtonDrive) SearchByNameInActiveFolder(
 		return nil, nil
 	}
 
-	childrenLinks, err := protonDrive.c.ListChildren(ctx, protonDrive.MainShare.ShareID, folderLink.LinkID, true)
+	childrenLinks, err := protonDrive.c.ListVolumeChildren(ctx, protonDrive.MainShare.VolumeID, folderLink.LinkID, true)
 	if err != nil {
 		return nil, err
 	}

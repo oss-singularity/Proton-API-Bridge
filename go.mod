@@ -4,6 +4,8 @@ go 1.23.0
 
 toolchain go1.23.5
 
+replace github.com/rclone/go-proton-api => github.com/oss-singularity/go-proton-api v1.0.5-0.20260916221756-b491f8604bbd
+
 require (
 	github.com/ProtonMail/gluon v0.17.1-0.20230724134000-308be39be96e
 	github.com/ProtonMail/go-crypto v1.4.1

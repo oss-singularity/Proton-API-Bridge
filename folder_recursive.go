@@ -84,7 +84,7 @@ func (protonDrive *ProtonDrive) listDirectoriesRecursively(
 
 	if maxDepth == -1 || curDepth < maxDepth {
 		if link.Type == proton.LinkTypeFolder {
-			childrenLinks, err := protonDrive.c.ListChildren(ctx, protonDrive.MainShare.ShareID, link.LinkID, true)
+			childrenLinks, err := protonDrive.c.ListVolumeChildren(ctx, protonDrive.MainShare.VolumeID, link.LinkID, true)
 			if err != nil {
 				return err
 			}

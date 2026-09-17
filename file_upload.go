@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"os"
@@ -18,6 +20,156 @@ import (
 	"github.com/rclone/Proton-API-Bridge/utility"
 	"github.com/rclone/go-proton-api"
 )
+
+const (
+	blockUploadMaxAttempts    = 5
+	blockUploadRetryBaseDelay = time.Second
+	blockUploadRetryMaxDelay  = 15 * time.Second
+)
+
+type pendingUploadBlock struct {
+	blockUploadInfo proton.BlockUploadInfo
+	encData         []byte
+}
+
+type blockUploadResult struct {
+	index int
+	err   error
+}
+
+type blockUploadRetryLogger interface {
+	Warnf(format string, v ...interface{})
+}
+
+func retryableBlockUploadError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	var apiErr *proton.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status >= 500 && apiErr.Status <= 599
+	}
+
+	var protonNetErr *proton.NetError
+	return errors.As(err, &protonNetErr)
+}
+
+func blockUploadRetryDelay(failedAttempt int) time.Duration {
+	delay := blockUploadRetryBaseDelay
+	for i := 1; i < failedAttempt && delay < blockUploadRetryMaxDelay; i++ {
+		delay *= 2
+	}
+	if delay > blockUploadRetryMaxDelay {
+		return blockUploadRetryMaxDelay
+	}
+	return delay
+}
+
+func waitForBlockUploadRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func uploadBlockBatchWithRetry(
+	ctx context.Context,
+	blocks []pendingUploadBlock,
+	maxAttempts int,
+	requestLinks func(context.Context, []proton.BlockUploadInfo) ([]proton.BlockUploadLink, error),
+	uploadBlock func(context.Context, proton.BlockUploadLink, []byte) error,
+	wait func(context.Context, time.Duration) error,
+	logger blockUploadRetryLogger,
+) error {
+	remaining := append([]pendingUploadBlock(nil), blocks...)
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		blockList := make([]proton.BlockUploadInfo, len(remaining))
+		for i := range remaining {
+			blockList[i] = remaining[i].blockUploadInfo
+		}
+
+		links, err := requestLinks(ctx, blockList)
+		if err != nil {
+			lastErr = err
+			if !retryableBlockUploadError(err) || attempt == maxAttempts {
+				return err
+			}
+		} else {
+			if len(links) != len(remaining) {
+				return fmt.Errorf(
+					"requested %d Proton block upload links, received %d",
+					len(remaining),
+					len(links),
+				)
+			}
+
+			results := make(chan blockUploadResult, len(remaining))
+			for i := range remaining {
+				go func(index int) {
+					results <- blockUploadResult{
+						index: index,
+						err:   uploadBlock(ctx, links[index], remaining[index].encData),
+					}
+				}(i)
+			}
+
+			errorsByIndex := make([]error, len(remaining))
+			for range remaining {
+				result := <-results
+				errorsByIndex[result.index] = result.err
+			}
+
+			failed := make([]pendingUploadBlock, 0, len(remaining))
+			var terminalErr error
+			lastErr = nil
+			for i, uploadErr := range errorsByIndex {
+				if uploadErr == nil {
+					continue
+				}
+				if !retryableBlockUploadError(uploadErr) && terminalErr == nil {
+					terminalErr = uploadErr
+				}
+				if lastErr == nil {
+					lastErr = uploadErr
+				}
+				failed = append(failed, remaining[i])
+			}
+			if terminalErr != nil {
+				return terminalErr
+			}
+			if len(failed) == 0 {
+				return nil
+			}
+			if attempt == maxAttempts {
+				return lastErr
+			}
+			remaining = failed
+		}
+
+		delay := blockUploadRetryDelay(attempt)
+		if logger != nil {
+			logger.Warnf(
+				"Retrying %d transient Proton block upload(s) after %s (attempt %d/%d)",
+				len(remaining),
+				delay,
+				attempt+1,
+				maxAttempts,
+			)
+		}
+		if err := wait(ctx, delay); err != nil {
+			return err
+		}
+	}
+
+	return lastErr
+}
 
 func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link *proton.Link, createFileResp *proton.CreateFileRes) (string, bool, error) {
 	if link != nil {
@@ -38,7 +190,7 @@ func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link
 
 			// delete the link (skipping trash, otherwise it won't work) and
 			// signal the caller to resubmit the file creation request
-			err := protonDrive.c.DeleteChildren(ctx, protonDrive.MainShare.ShareID, link.ParentLinkID, linkID)
+			err := protonDrive.c.DeleteVolumeLinks(ctx, protonDrive.MainShare.VolumeID, linkID)
 			if err != nil {
 				return "", false, err
 			}
@@ -63,14 +215,14 @@ func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link
 			// Question: how do we observe for file upload cancellation -> clientUID?
 			// Random thoughts: if there are concurrent modification to the draft, the server should be able to catch this when commiting the revision
 			// since the manifestSignature (hash) will fail to match
-			err = protonDrive.c.DeleteRevision(ctx, protonDrive.MainShare.ShareID, linkID, draftRevision[0].ID)
+			err = protonDrive.c.DeleteVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID, draftRevision[0].ID)
 			if err != nil {
 				return "", false, err
 			}
 		}
 
 		// create a new revision
-		newRevision, err := protonDrive.c.CreateRevision(ctx, protonDrive.MainShare.ShareID, linkID)
+		newRevision, err := protonDrive.c.CreateVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID)
 		if err != nil {
 			return "", false, err
 		}
@@ -169,7 +321,7 @@ func (protonDrive *ProtonDrive) createFileUploadDraft(ctx context.Context, paren
 	}
 
 	createFileAction := func() (*proton.CreateFileRes, *proton.Link, error) {
-		createFileResp, err := protonDrive.c.CreateFile(ctx, protonDrive.MainShare.ShareID, createFileReq)
+		createFileResp, err := protonDrive.c.CreateVolumeFile(ctx, protonDrive.MainShare.VolumeID, createFileReq)
 		if err != nil {
 			// FIXME: check for duplicated filename by relying on checkAvailableHashes -> able to retrieve linkID too
 			// Also saving generating resources such as new nodeKR, etc.
@@ -257,62 +409,46 @@ func (protonDrive *ProtonDrive) createFileUploadDraft(ctx context.Context, paren
 }
 
 func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, newSessionKey *crypto.SessionKey, newNodeKR *crypto.KeyRing, file io.Reader, linkID, revisionID string) ([]byte, int64, []int64, string, error) {
-	type PendingUploadBlocks struct {
-		blockUploadInfo proton.BlockUploadInfo
-		encData         []byte
-	}
-
 	if newSessionKey == nil || newNodeKR == nil {
 		return nil, 0, nil, "", ErrMissingInputUploadAndCollectBlockData
 	}
 
 	totalFileSize := int64(0)
 
-	pendingUploadBlocks := make([]PendingUploadBlocks, 0)
+	pendingUploadBlocks := make([]pendingUploadBlock, 0)
 	manifestSignatureData := make([]byte, 0)
 	uploadPendingBlocks := func() error {
 		if len(pendingUploadBlocks) == 0 {
 			return nil
 		}
 
-		blockList := make([]proton.BlockUploadInfo, 0)
-		for i := range pendingUploadBlocks {
-			blockList = append(blockList, pendingUploadBlocks[i].blockUploadInfo)
+		requestLinks := func(ctx context.Context, blockList []proton.BlockUploadInfo) ([]proton.BlockUploadLink, error) {
+			return protonDrive.c.RequestBlockUpload(ctx, proton.BlockUploadReq{
+				AddressID:  protonDrive.MainShare.AddressID,
+				VolumeID:   protonDrive.MainShare.VolumeID,
+				LinkID:     linkID,
+				RevisionID: revisionID,
+				BlockList:  blockList,
+			})
 		}
-		blockUploadReq := proton.BlockUploadReq{
-			AddressID:  protonDrive.MainShare.AddressID,
-			ShareID:    protonDrive.MainShare.ShareID,
-			LinkID:     linkID,
-			RevisionID: revisionID,
-
-			BlockList: blockList,
-		}
-		blockUploadResp, err := protonDrive.c.RequestBlockUpload(ctx, blockUploadReq)
-		if err != nil {
-			return err
-		}
-
-		errChan := make(chan error)
-		uploadBlockWrapper := func(ctx context.Context, errChan chan error, bareURL, token string, block io.Reader) {
-			// log.Println("Before semaphore")
+		uploadBlock := func(ctx context.Context, link proton.BlockUploadLink, block []byte) error {
 			if err := protonDrive.blockUploadSemaphore.Acquire(ctx, 1); err != nil {
-				errChan <- err
-			}
-			defer protonDrive.blockUploadSemaphore.Release(1)
-			// log.Println("After semaphore")
-			// defer log.Println("Release semaphore")
-
-			errChan <- protonDrive.c.UploadBlock(ctx, bareURL, token, block)
-		}
-		for i := range blockUploadResp {
-			go uploadBlockWrapper(ctx, errChan, blockUploadResp[i].BareURL, blockUploadResp[i].Token, bytes.NewReader(pendingUploadBlocks[i].encData))
-		}
-
-		for i := 0; i < len(blockUploadResp); i++ {
-			err := <-errChan
-			if err != nil {
 				return err
 			}
+			defer protonDrive.blockUploadSemaphore.Release(1)
+
+			return protonDrive.c.UploadBlock(ctx, link.BareURL, link.Token, bytes.NewReader(block))
+		}
+		if err := uploadBlockBatchWithRetry(
+			ctx,
+			pendingUploadBlocks,
+			blockUploadMaxAttempts,
+			requestLinks,
+			uploadBlock,
+			waitForBlockUploadRetry,
+			protonDrive.Config.GetLogger(),
+		); err != nil {
+			return err
 		}
 
 		pendingUploadBlocks = pendingUploadBlocks[:0]
@@ -405,7 +541,7 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 		}
 		manifestSignatureData = append(manifestSignatureData, hash...)
 
-		pendingUploadBlocks = append(pendingUploadBlocks, PendingUploadBlocks{
+		pendingUploadBlocks = append(pendingUploadBlocks, pendingUploadBlock{
 			blockUploadInfo: proton.BlockUploadInfo{
 				Index:        i, // iOS drive: BE starts with 1
 				Size:         int64(len(encData)),
@@ -446,7 +582,7 @@ func (protonDrive *ProtonDrive) commitNewRevision(ctx context.Context, nodeKR *c
 		return err
 	}
 
-	err = protonDrive.c.CommitRevision(ctx, protonDrive.MainShare.ShareID, linkID, revisionID, commitRevisionReq)
+	err = protonDrive.c.CommitVolumeRevision(ctx, protonDrive.MainShare.VolumeID, linkID, revisionID, commitRevisionReq)
 	if err != nil {
 		return err
 	}
